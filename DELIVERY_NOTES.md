@@ -443,28 +443,28 @@ public class TTPUserDetailsService implements UserDetailsService {
 
 **User attempts login with email: "john@bank.com" and password: "myPassword123"**
 
-```
-Step 1: Spring Security calls loadUserByUsername("john@bank.com")
-   ↓
-Step 2: Query database
-   SELECT * FROM customer WHERE email = 'john@bank.com'
-   ↓
-Step 3: Found customer with:
-   email: john@bank.com
-   pwd: $2a$10$abcdef... (BCrypt hash)
-   role: CUSTOMER
-   ↓
-Step 4: Create authorities from role
-   List.of(new SimpleGrantedAuthority("CUSTOMER"))
-   ↓
-Step 5: Return Spring Security UserDetails object
-   new User("john@bank.com", "$2a$10$abcdef...", [CUSTOMER])
-   ↓
-Step 6: Spring Security compares entered password with stored hash
-   BCryptPasswordEncoder.matches("myPassword123", "$2a$10$abcdef...")
-   ↓
-Step 7: If matches → Grant access with CUSTOMER role
-   If doesn't match → Throw BadCredentialsException
+```mermaid
+sequenceDiagram
+    participant User as 👤 User
+    participant Browser as 🌐 Browser
+    participant SS as 🔐 Spring Security
+    participant Service as 📋 TTPUserDetailsService
+    participant DB as 🗄️ PostgreSQL
+    participant Encoder as 🔒 BCryptEncoder
+    
+    User->>Browser: Enters email & password
+    Browser->>SS: POST /login (credentials)
+    SS->>Service: loadUserByUsername("john@bank.com")
+    Service->>DB: Query: SELECT * WHERE email='john@bank.com'
+    DB-->>Service: Return Customer object
+    Service->>Service: Convert role to Authority
+    Service-->>SS: Return UserDetails
+    SS->>Encoder: matches(entered_pwd, stored_hash)
+    Encoder-->>SS: true ✓
+    SS->>SS: Create Authentication Token
+    SS->>SS: Store in SecurityContext
+    SS-->>Browser: Session created, Redirect to /dashboard
+    Browser-->>User: ✓ Login successful!
 ```
 
 **Key Concepts:**
@@ -496,45 +496,21 @@ Step 7: If matches → Grant access with CUSTOMER role
 
 **Real-Life Banking Scenario:**
 
-```
-Customer: John Doe
-Email: john@bank.com
-Password: SecurePassword123
-Role: CUSTOMER
-
-Permissions:
-✓ /accounts - Can view
-✓ /balance - Can view
-✓ /loans - Can apply
-✗ /admin-panel - Cannot access (needs ADMIN role)
-
----
-
-Employee: Manager Smith
-Email: manager@bank.com
-Password: ManagerPass456
-Role: MANAGER
-
-Permissions:
-✓ /accounts - Can view
-✓ /balance - Can view
-✓ /loans - Can approve/reject
-✓ /customers - Can manage
-✓ /reports - Can view
-✗ /system-config - Cannot access (needs ADMIN role)
-
----
-
-Employee: System Admin
-Email: admin@bank.com
-Password: AdminPass789
-Role: ADMIN
-
-Permissions:
-✓ ALL endpoints - Can access everything
-✓ System configuration
-✓ User management
-✓ Database access
+```mermaid
+graph TD
+    A["👤 Customer: John Doe<br/>Email: john@bank.com<br/>Role: CUSTOMER"] -->|Can Access| B["✓ /accounts"]
+    A -->|Can Access| C["✓ /balance"]
+    A -->|Can Access| D["✓ /loans"]
+    A -->|Cannot Access| E["✗ /admin-panel"]
+    
+    F["👔 Manager: Manager Smith<br/>Email: manager@bank.com<br/>Role: MANAGER"] -->|Can Access| G["✓ /accounts"]
+    F -->|Can Access| H["✓ /loans/approve"]
+    F -->|Can Access| I["✓ /customers"]
+    F -->|Cannot Access| J["✗ /admin-panel"]
+    
+    K["🔧 Admin: System Admin<br/>Email: admin@bank.com<br/>Role: ADMIN"] -->|Can Access| L["✓ ALL Endpoints"]
+    K -->|Can Access| M["✓ /system-config"]
+    K -->|Can Access| N["✓ /user-management"]
 ```
 
 **Security Filter Chain with Custom Service:**
@@ -593,86 +569,42 @@ Airport Security:
 
 Spring Security works through a chain of filters:
 
-```
-1. SecurityContextPersistenceFilter
-   → Establishes security context
-   
-2. HeaderWriterFilter
-   → Adds security headers
-   
-3. CorsFilter
-   → Handles cross-origin requests
-   
-4. CsrfFilter
-   → Prevents cross-site request forgery
-   
-5. LogoutFilter
-   → Handles logout requests
-   
-6. UsernamePasswordAuthenticationFilter (YOUR USERS GO HERE)
-   → Processes login form
-   
-7. BasicAuthenticationFilter
-   → Processes HTTP Basic auth
-   
-8. AuthorizationFilter
-   → Checks permissions
+```mermaid
+graph LR
+    A["HTTP Request"] --> B["SecurityContextPersistenceFilter"]
+    B --> C["HeaderWriterFilter"]
+    C --> D["CorsFilter"]
+    D --> E["CsrfFilter"]
+    E --> F["LogoutFilter"]
+    F --> G["UsernamePasswordAuthenticationFilter⭐"]
+    G --> H["BasicAuthenticationFilter"]
+    H --> I["AuthorizationFilter"]
+    I --> J["Your Controller"]
+    J --> K["HTTP Response"]
+    
+    style G fill:#FFE6E6
 ```
 
 ### 3. The Authentication Flow
 
-```
-┌─────────────────────────────────────────────────────┐
-│ 1. User sends login request                          │
-│    POST /login → email=john@bank.com, pwd=password123│
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 2. UsernamePasswordAuthenticationFilter intercepts   │
-│    Creates: UsernamePasswordAuthenticationToken      │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 3. AuthenticationManager delegates to AuthProvider   │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 4. Provider calls:                                  │
-│    userDetailsService.loadUserByUsername(...)       │
-│    (YOUR TTPUserDetailsService!)                    │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 5. Service queries database:                        │
-│    SELECT * FROM customer WHERE email = '...'       │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 6. Customer found, creates UserDetails with         │
-│    authorities (role)                               │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 7. PasswordEncoder compares:                        │
-│    entered password: "password123"                  │
-│    stored hash: "$2a$10$abc..."                     │
-│    Result: MATCH ✓                                  │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 8. AuthenticationToken marked as authenticated      │
-│    Authorities: [CUSTOMER]                          │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 9. SecurityContext stores authentication            │
-│    (Session/JWT token created)                      │
-└─────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────┐
-│ 10. User redirected/session created                 │
-│     Can now access authenticated endpoints          │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["1️⃣ User sends login request<br/>POST /login → email + password"] --> B["2️⃣ UsernamePasswordAuthenticationFilter<br/>intercepts & creates token"]
+    B --> C["3️⃣ AuthenticationManager<br/>orchestrates authentication"]
+    C --> D["4️⃣ AuthenticationProvider<br/>delegates to UserDetailsService"]
+    D --> E["5️⃣ TTPUserDetailsService<br/>queries database"]
+    E --> F["6️⃣ Database returns<br/>Customer object"]
+    F --> G["7️⃣ Create UserDetails<br/>with authorities"]
+    G --> H["8️⃣ PasswordEncoder<br/>compares passwords"]
+    H -->|Match ✓| I["9️⃣ Authentication Token<br/>marked as authenticated"]
+    H -->|No Match ✗| J["❌ BadCredentialsException"]
+    I --> K["🔟 SecurityContext stores<br/>authentication"]
+    K --> L["✓ Session created<br/>User can access protected endpoints"]
+    
+    style A fill:#B3E5FC
+    style I fill:#C8E6C9
+    style J fill:#FFCDD2
+    style L fill:#A5D6A7
 ```
 
 ### 4. Role-Based Access Control (RBAC)
@@ -696,37 +628,21 @@ public String adminPage() {
 .requestMatchers("/manager/**").hasAnyRole("MANAGER", "ADMIN")
 ```
 
-**Real-Life Scenario:**
+**Real-Life Scenario - Authorization Decision Tree:**
 
-```
-Bank Employee Access Levels:
-
-Role: CUSTOMER
-├─ /accounts - ✓
-├─ /balance - ✓
-├─ /loans - ✓
-├─ /statements - ✓
-└─ /admin-panel - ✗
-
-Role: LOAN_OFFICER
-├─ /accounts - ✓
-├─ /balance - ✓
-├─ /loans - ✓
-├─ /loans/approve - ✓
-├─ /statements - ✓
-├─ /reports - ✓
-└─ /admin-panel - ✗
-
-Role: ADMIN
-├─ /accounts - ✓
-├─ /balance - ✓
-├─ /loans - ✓
-├─ /loans/approve - ✓
-├─ /statements - ✓
-├─ /reports - ✓
-├─ /admin-panel - ✓
-├─ /system-config - ✓
-└─ /user-management - ✓
+```mermaid
+graph TD
+    A["User Request to /endpoint"] --> B{"Is user<br/>authenticated?"}
+    B -->|No| C["❌ 401 Unauthorized<br/>Redirect to login"]
+    B -->|Yes| D{"Does endpoint<br/>require specific role?"}
+    D -->|No| E["✓ 200 OK<br/>Access granted"]
+    D -->|Yes| F{"Does user have<br/>required role?"}
+    F -->|Yes| E
+    F -->|No| G["❌ 403 Forbidden<br/>Access Denied"]
+    
+    style C fill:#FFCDD2
+    style E fill:#C8E6C9
+    style G fill:#FFCDD2
 ```
 
 ---
@@ -746,280 +662,228 @@ id  | email            | pwd                          | role
 2   | admin@bank.com   | $2a$10$adminPasswordHash     | ADMIN
 ```
 
-**User Action:**
-```
-Browser → https://bank.com/login
-          Enters email: john@example.com
-          Enters password: MySecurePassword123
-          Clicks "Login"
-```
+**Detailed Login Flow - Mermaid Diagram:**
 
-**Behind the Scenes:**
-
-```
-Step 1: Form submitted
-POST /login
-Content-Type: application/x-www-form-urlencoded
-email=john@example.com&password=MySecurePassword123
-
-Step 2: Spring Security intercepts
-UsernamePasswordAuthenticationFilter processes request
-
-Step 3: Call TTPUserDetailsService
-loadUserByUsername("john@example.com")
-
-Step 4: Database Query
-SELECT * FROM customer WHERE email = 'john@example.com'
-RESULT:
-{
-  id: 1,
-  email: "john@example.com",
-  pwd: "$2a$10$..encrypted..",
-  role: "CUSTOMER"
-}
-
-Step 5: Create UserDetails
-UserDetails user = new User(
-    "john@example.com",
-    "$2a$10$..encrypted..",
-    [SimpleGrantedAuthority("CUSTOMER")]
-)
-
-Step 6: Password Validation
-BCryptPasswordEncoder.matches(
-    "MySecurePassword123",              // What user entered
-    "$2a$10$..encrypted.."              // What's in database
-)
-RESULT: true ✓
-
-Step 7: Create Authentication
-Authentication auth = new UsernamePasswordAuthenticationToken(
-    user,
-    null,
-    [SimpleGrantedAuthority("CUSTOMER")]
-)
-auth.setAuthenticated(true)
-
-Step 8: Store in SecurityContext
-SecurityContextHolder.getContext().setAuthentication(auth)
-
-Step 9: Session Created
-Session ID: abc123def456...
-Stored in browser cookie: JSESSIONID=abc123def456...
-
-Step 10: Redirect to dashboard
-HTTP 302 Redirect → /dashboard
+```mermaid
+sequenceDiagram
+    actor John as John Doe
+    participant Browser as Web Browser
+    participant Spring as Spring Security
+    participant Service as TTPUserDetailsService
+    participant DB as PostgreSQL Database
+    participant Encoder as BCrypt Encoder
+    
+    John->>Browser: 1. Opens login page
+    John->>Browser: 2. Enters email: john@example.com
+    John->>Browser: 3. Enters password: MySecurePassword123
+    John->>Browser: 4. Clicks Login button
+    
+    Browser->>Spring: POST /login<br/>(email + password)
+    activate Spring
+    
+    Spring->>Service: loadUserByUsername("john@example.com")
+    activate Service
+    
+    Service->>DB: SELECT * FROM customer<br/>WHERE email = 'john@example.com'
+    activate DB
+    DB-->>Service: Returns Customer{<br/>id: 1, email: john@example.com,<br/>pwd: $2a$10$..., role: CUSTOMER}
+    deactivate DB
+    
+    Service->>Service: Convert role<br/>to GrantedAuthority
+    Service-->>Spring: Return UserDetails<br/>(email, hashedPwd, [CUSTOMER])
+    deactivate Service
+    
+    Spring->>Encoder: matches(userPassword: "MySecurePassword123",<br/>dbHash: "$2a$10$...")
+    activate Encoder
+    Encoder-->>Spring: ✓ true - Passwords match!
+    deactivate Encoder
+    
+    Spring->>Spring: Create Authentication Token<br/>with authorities
+    Spring->>Spring: Store in SecurityContext
+    Spring->>Spring: Create Session<br/>JSESSIONID = abc123def456
+    
+    Spring-->>Browser: HTTP 302 Redirect<br/>Location: /dashboard<br/>Set-Cookie: JSESSIONID=abc123def456
+    deactivate Spring
+    
+    Browser-->>John: ✓ Redirect to dashboard
+    John->>Browser: Dashboard loads successfully
 ```
 
-**After Login:**
+**After Login - Request to Protected Endpoint:**
 
+```mermaid
+graph TD
+    A["User navigates to /accounts<br/>(Browser sends JSESSIONID cookie)"] --> B{"Spring Security<br/>Checks:"}
+    B --> C1["1. Valid session?"]
+    B --> C2["2. User authenticated?"]
+    B --> C3["3. Has required role?"]
+    
+    C1 -->|YES| D["✓ Session valid"]
+    C2 -->|YES| E["✓ User logged in"]
+    C3 -->|YES| F["✓ Has CUSTOMER role"]
+    
+    D --> G["✓ Access Granted<br/>200 OK"]
+    E --> G
+    F --> G
+    G --> H["Browser displays<br/>Account details"]
+    
+    style G fill:#C8E6C9
+    style H fill:#A5D6A7
 ```
-User navigates to /accounts
-Browser sends request with JSESSIONID cookie
 
-Spring Security checks:
-1. Is there a valid session? YES
-2. Is user authenticated? YES
-3. Does user have required authority? YES (CUSTOMER)
-4. Allow request? YES ✓
+**Request to Unauthorized Endpoint:**
 
-Response: Account details shown
-
----
-
-User navigates to /admin-panel
-Browser sends request with JSESSIONID cookie
-
-Spring Security checks:
-1. Is there a valid session? YES
-2. Is user authenticated? YES
-3. Does user have required authority? NO (needs ADMIN, has CUSTOMER)
-4. Allow request? NO ✗
-
-Response: 403 Forbidden - Access Denied
+```mermaid
+graph TD
+    A["User navigates to /admin-panel<br/>(Browser sends JSESSIONID cookie)"] --> B{"Spring Security<br/>Checks:"}
+    B --> C1["1. Valid session?"]
+    B --> C2["2. User authenticated?"]
+    B --> C3["3. Has ADMIN role?"]
+    
+    C1 -->|YES| D["✓ Session valid"]
+    C2 -->|YES| E["✓ User logged in"]
+    C3 -->|NO| F["✗ User has CUSTOMER,<br/>needs ADMIN"]
+    
+    D --> G
+    E --> G
+    F --> G["❌ Access Denied<br/>403 Forbidden"]
+    G --> H["Browser displays<br/>Error page"]
+    
+    style G fill:#FFCDD2
+    style H fill:#FFB3BA
 ```
 
 ### Example 2: Registering a New Customer
 
 **Scenario: New customer Sarah signs up**
 
-```java
-// Frontend sends signup form:
-POST /register
-{
-    "email": "sarah@example.com",
-    "password": "ChosenPassword456",
-    "role": "CUSTOMER"
-}
-
-// Backend code (not in repo, but would look like):
-@PostMapping("/register")
-public String register(@RequestBody SignupRequest request) {
-    // Step 1: Encode password
-    String encodedPwd = passwordEncoder.encode(request.getPassword());
-    // encodedPwd = "$2a$10$aAbCdEfGhIjKlMnOpQrStU..." (BCrypt hash)
+```mermaid
+sequenceDiagram
+    actor Sarah as Sarah
+    participant App as Bank Application
+    participant Encoder as BCrypt Encoder
+    participant Service as CustomerService
+    participant DB as PostgreSQL
     
-    // Step 2: Create customer
-    Customer customer = new Customer();
-    customer.setEmail(request.getEmail());
-    customer.setPwd(encodedPwd);  // Store encrypted, not plain text!
-    customer.setRole(request.getRole());
+    Sarah->>App: 1. Opens signup form
+    Sarah->>App: 2. Enters email: sarah@example.com
+    Sarah->>App: 3. Enters password: ChosenPassword456
+    Sarah->>App: 4. Clicks Register
     
-    // Step 3: Save to database
-    customerRepository.save(customer);
+    App->>Encoder: encode("ChosenPassword456")
+    Encoder-->>App: Returns: $2a$10$aAbCdEfGhIjKlMnOpQrStU...
     
-    // Step 4: Return success
-    return "Registration successful! You can now login.";
-}
-
-// Result in database:
-INSERT INTO customer (email, pwd, role) 
-VALUES ('sarah@example.com', '$2a$10$aAbCdEfGhIjKlMnOpQrStU...', 'CUSTOMER')
+    App->>Service: Save customer with encoded password
+    activate Service
+    
+    Service->>DB: INSERT INTO customer<br/>(email, pwd, role)<br/>VALUES ('sarah@example.com',<br/>'$2a$10$aAbC...', 'CUSTOMER')
+    activate DB
+    DB-->>Service: ✓ Record inserted
+    deactivate DB
+    
+    Service-->>App: Registration successful
+    deactivate Service
+    
+    App-->>Sarah: ✓ Account created!<br/>You can now login
+    
+    Note over Sarah,DB: Later, when Sarah logs in...
+    Sarah->>App: POST /login<br/>email: sarah@example.com<br/>password: ChosenPassword456
+    App->>DB: SELECT pwd FROM customer<br/>WHERE email='sarah@example.com'
+    DB-->>App: $2a$10$aAbCdEfGhIjKlMnOpQrStU...
+    App->>Encoder: matches("ChosenPassword456",<br/>"$2a$10$aAbC...")
+    Encoder-->>App: ✓ true
+    App-->>Sarah: Login successful!
 ```
 
-**Next time Sarah logs in:**
+### Example 3: Password Encoding Security
 
-```
-1. Enters password: ChosenPassword456
-2. TTPUserDetailsService queries: SELECT * FROM customer WHERE email = 'sarah@example.com'
-3. Gets: pwd = "$2a$10$aAbCdEfGhIjKlMnOpQrStU..."
-4. BCryptPasswordEncoder.matches("ChosenPassword456", "$2a$10$aAbCdEfGhIjKlMnOpQrStU...")
-5. Matches? YES ✓ → Login successful
-```
-
-### Example 3: Why Password Encoding is Critical
-
-**WRONG APPROACH - NEVER DO THIS:**
-```
-User: john@bank.com
-Password stored in DB: password123
-
-If database is hacked:
-Attacker sees: password123
-Attacker can: Login as John immediately!
-```
-
-**CORRECT APPROACH - What we're doing:**
-```
-User: john@bank.com
-Password stored in DB: $2a$10$aAbCdEfGhIjKlMnOpQrStU...
-
-If database is hacked:
-Attacker sees: $2a$10$aAbCdEfGhIjKlMnOpQrStU...
-Attacker tries to:
-  1. Crack hash (computationally difficult)
-  2. Use hash directly (doesn't work for login)
-  3. Rainbow table attack (fails due to salt)
-Result: Data protected!
-```
-
-**How BCrypt Salt Works:**
-
-```
-encode("password") → $2a$10$aAbCdEfGhIjKlMnOpQrStU...
-encode("password") → $2a$10$dEfGhIjKlMnOpQrStUvWxY...
-encode("password") → $2a$10$gHiJkLmNoPqRsT uVwXyZaB...
-
-Same input, different output every time (due to random salt)!
-
-This prevents:
-- Rainbow table attacks
-- Dictionary attacks
-- Brute force detection
+```mermaid
+graph TD
+    A["User Registration<br/>Password: MyPassword123"] --> B["BCrypt Encoder"]
+    B --> C["Hash 1: $2a$10$aAbCdEfGhIjKlMnOpQrStU..."]
+    
+    A2["User Registration Again<br/>Password: MyPassword123"] --> B2["BCrypt Encoder<br/>(with different salt)"]
+    B2 --> C2["Hash 2: $2a$10$dEfGhIjKlMnOpQrStUvWxY..."]
+    
+    subgraph DB["Database Storage"]
+        C --> D["✓ Stored securely<br/>(Different hash each time!)"]
+        C2 --> D
+    end
+    
+    subgraph Attack["If Database Hacked"]
+        D --> E["Attacker sees:<br/>$2a$10$aAbCdEfGhIjKlMnOpQrStU..."]
+        D --> F["Cannot use hash directly"]
+        D --> G["Cannot crack (computationally hard)"]
+        D --> H["Cannot use rainbow tables<br/>(due to unique salt)"]
+        E --> I["❌ Cannot login"]
+        F --> I
+        G --> I
+        H --> I
+    end
+    
+    style D fill:#C8E6C9
+    style I fill:#A5D6A7
 ```
 
 ### Example 4: Authorization in Practice
 
-**Without proper authorization:**
-```
-User: customer@example.com (CUSTOMER role)
-
-GET /accounts/123
-Response: {account details}
-
-GET /admin-panel
-Response: {admin dashboard}  ← SECURITY BREACH!
-
-DELETE /customer/456
-Response: {customer deleted}  ← SECURITY BREACH!
-```
-
-**With proper authorization (our project):**
-```
-User: customer@example.com (CUSTOMER role)
-
-GET /accounts
-Authorization check: hasRole('CUSTOMER')? YES ✓
-Response: ✓ {your accounts}
-
-GET /admin-panel
-Authorization check: hasRole('ADMIN')? NO ✗
-Response: ✗ 403 Forbidden - Access Denied
-
-DELETE /customer/456
-Authorization check: hasRole('ADMIN')? NO ✗
-Response: ✗ 403 Forbidden - Access Denied
+```mermaid
+graph TD
+    A["API Endpoint Requests"] --> B{"/accounts<br/>requires: CUSTOMER"}
+    A --> C{"/admin-panel<br/>requires: ADMIN"}
+    A --> D{"/loans/approve<br/>requires: MANAGER"}
+    
+    E["User: john@example.com<br/>Role: CUSTOMER"] 
+    
+    E --> B --> |Has role?| F["✓ 200 OK<br/>View accounts"]
+    E --> C --> |Has role?| G["✗ 403 Forbidden<br/>Access Denied"]
+    E --> D --> |Has role?| H["✗ 403 Forbidden<br/>Access Denied"]
+    
+    style F fill:#C8E6C9
+    style G fill:#FFCDD2
+    style H fill:#FFCDD2
 ```
 
 ---
 
 ## Architecture Diagram
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    HTTP Request                           │
-│              (email + password from form)                 │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│         SecurityFilterChain (FilterChain)                 │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ UsernamePasswordAuthenticationFilter                │  │
-│  │ (Intercepts /login requests)                        │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│              AuthenticationManager                        │
-│              (Main orchestrator)                          │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│         AuthenticationProvider                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ 1. Call UserDetailsService                         │  │
-│  │ 2. Get UserDetails from database                   │  │
-│  │ 3. Compare passwords with PasswordEncoder          │  │
-│  │ 4. Check authorities/roles                         │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│          TTPUserDetailsService                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ loadUserByUsername(String email)                   │  │
-│  │  ├─ Find customer in database                      │  │
-│  │  ├─ Get email, pwd, role                           │  │
-│  │  ├─ Create UserDetails with authorities            │  │
-│  │  └─ Return to AuthenticationProvider               │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│              CustomerRepository                           │
-│              (Data Access Layer)                          │
-│              Queries PostgreSQL Database                  │
-└──────────────────────────────────────────────────────────┘
-                        ↓
-┌──────────────────────────────────────────────────────────┐
-│              PostgreSQL Database                          │
-│              customer table                               │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ id  │ email              │ pwd hash      │ role    │  │
-│  │ 1   │ john@example.com   │ $2a$10$...    │CUSTOMER │  │
-│  │ 2   │ admin@bank.com     │ $2a$10$...    │ ADMIN   │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    User["👤 User<br/>Browser"] -->|POST /login<br/>email + password| A["HTTP Request"]
+    
+    A --> B["🔐 Spring Security<br/>Filter Chain"]
+    
+    B --> C["UsernamePasswordAuthenticationFilter<br/>(Intercepts /login)"]
+    
+    C --> D["AuthenticationManager<br/>(Main Orchestrator)"]
+    
+    D --> E["AuthenticationProvider"]
+    
+    E --> F["📋 TTPUserDetailsService<br/>loadUserByUsername"]
+    
+    F --> G["🗄️ PostgreSQL Database<br/>customer table"]
+    
+    G -->|Returns Customer| F
+    
+    F -->|UserDetails| E
+    
+    E --> H["🔒 BCryptPasswordEncoder<br/>matches"]
+    
+    H -->|Authenticated| D
+    
+    D --> I["SecurityContext<br/>(Store Authentication)"]
+    
+    I --> J["🔐 Session Created<br/>JSESSIONID"]
+    
+    J -->|302 Redirect| K["✓ Access Dashboard"]
+    
+    K --> User
+    
+    style F fill:#E1F5FE
+    style G fill:#F3E5F5
+    style H fill:#FFF3E0
+    style J fill:#C8E6C9
 ```
 
 ---
@@ -1098,7 +962,7 @@ After this training, students should explore:
 
 ---
 
-**Document Version:** 1.0  
+**Document Version:** 2.0 (Enhanced with Mermaid Diagrams)  
 **Last Updated:** September 2024  
 **Suitable For:** Freshers & Junior Developers  
 **Prerequisites:** Basic Java, Spring Boot basics, Database fundamentals
